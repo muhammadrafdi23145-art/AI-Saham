@@ -1,10 +1,9 @@
 streamlit
 yfinance
 pandas
-numpy<2.0.0
-pandas-ta
+numpy
 matplotlib
 seaborn
-tensorflow
+tensorflow-cpu
 scikit-learn
 plotly
