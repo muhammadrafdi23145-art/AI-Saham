@@ -2,8 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import pandas_ta as ta
-import matplotlib.pyplot as plt
+import matplotlib.subplots as plt
 import seaborn as sns
 import plotly.graph_objects as go
 import warnings
@@ -20,11 +19,11 @@ warnings.filterwarnings('ignore')
 
 # --- KONFIGURASI HALAMAN STREAMLIT ---
 st.set_page_config(page_title="AI Trading Forensik", layout="wide")
-st.title("AI Trading Engine - Clean Data Edition")
+st.title("🤖 AI Trading Engine - Clean Data Edition")
 st.markdown("Dashboard backtest berbasis Deep Learning (LSTM) dengan filter multikolinearitas.")
 
 # --- SIDEBAR: INPUT INTERAKTIF ---
-st.sidebar.header("Parameter AI & Trading")
+st.sidebar.header("⚙️ Parameter AI & Trading")
 
 START_DATE = st.sidebar.date_input("Start Date", pd.to_datetime("2018-01-01"))
 END_DATE = st.sidebar.date_input("End Date", pd.to_datetime("2024-01-01"))
@@ -78,10 +77,7 @@ if st.sidebar.button("🚀 Jalankan AI Backtest", type="primary"):
     hasil_backtest = {}
     data_chart = {}
 
-    # Progress Bar
-    progress_text = "Mengunduh data makro..."
-    bar = st.progress(0, text=progress_text)
-
+    bar = st.progress(0, text="Mengunduh data makro...")
     df_ihsg = fix_yfinance(yf.download("^JKSE", start=START_DATE, end=END_DATE, progress=False))['Close']
 
     for idx, ticker in enumerate(selected_stocks):
@@ -94,22 +90,30 @@ if st.sidebar.button("🚀 Jalankan AI Backtest", type="primary"):
             df = df[['Open','High','Low','Close','Volume']].copy()
             df = df.join(df_ihsg.rename("IHSG"), how='left').ffill().bfill()
 
-            # Feature Engineering (Clean Data)
+            # --- FEATURE ENGINEERING MURNI (TANPA PANDAS-TA) ---
             df['Ret_Close'] = df['Close'].pct_change()
             df['Ret_IHSG'] = df['IHSG'].pct_change()
-            df.ta.ema(length=50, append=True)
+            
+            # EMA 50
+            df['EMA_50'] = df['Close'].ewm(span=50, adjust=False).mean()
             df['Trend'] = (df['Close'] > df['EMA_50']).astype(int)
-            df.ta.roc(length=10, append=True)
+            
+            # ROC 10
+            df['ROC_10'] = df['Close'].pct_change(periods=10) * 100
 
-            bb = df.ta.bbands(length=20)
-            df = pd.concat([df, bb], axis=1)
-            bbl = [c for c in df.columns if "BBL" in c][0]
-            bbu = [c for c in df.columns if "BBU" in c][0]
-            df['BB_width'] = (df[bbu] - df[bbl]) / df['Close']
+            # Bollinger Bands 20
+            sma20 = df['Close'].rolling(window=20).mean()
+            std20 = df['Close'].rolling(window=20).std()
+            df['BBL'] = sma20 - (2 * std20)
+            df['BBU'] = sma20 + (2 * std20)
+            df['BB_width'] = (df['BBU'] - df['BBL']) / df['Close']
 
             if df['BB_width'].mean() < MIN_VOLATILITY: continue
 
+            # Volume Price Trend (VPT)
             df['VPT'] = (df['Volume'] * ((df['Close'] - df['Close'].shift(1)) / df['Close'].shift(1))).cumsum()
+            
+            # Target (1 = Naik > 2% besok)
             df['Target'] = (df['Close'].shift(-1) > df['Close'] * (1 + THRESHOLD_RETURN)).astype(int)
             df.replace([np.inf, -np.inf], np.nan, inplace=True)
             df.dropna(inplace=True)
@@ -190,7 +194,7 @@ if st.sidebar.button("🚀 Jalankan AI Backtest", type="primary"):
             hasil_backtest[ticker] = {'Profit (%)': profit, 'Total Trade': total_trade}
 
             if ticker == SAHAM_ANALISIS:
-                data_chart['df'], data_chart['buy'], data_chart['sell'], data_chart['bbl'], data_chart['bbu'] = df.loc[dates_test], buy_markers, sell_markers, bbl, bbu
+                data_chart['df'], data_chart['buy'], data_chart['sell'] = df.loc[dates_test], buy_markers, sell_markers
 
         except Exception as e:
             st.error(f"Error pada {ticker}: {e}")
@@ -202,10 +206,9 @@ if st.sidebar.button("🚀 Jalankan AI Backtest", type="primary"):
     col1, col2 = st.columns([1, 2])
 
     with col1:
-        st.subheader("Performa Portfolio")
+        st.subheader("📊 Performa Portfolio")
         if hasil_backtest:
             df_hasil = pd.DataFrame(hasil_backtest).T
-            # Asumsi bobot dibagi rata
             alokasi_bobot = 100 / len(df_hasil)
             df_hasil['Alokasi Modal (Rp)'] = INITIAL_CAPITAL * (alokasi_bobot / 100)
             df_hasil['Hasil Akhir (Rp)'] = df_hasil['Alokasi Modal (Rp)'] * (1 + df_hasil['Profit (%)'] / 100)
@@ -222,34 +225,30 @@ if st.sidebar.button("🚀 Jalankan AI Backtest", type="primary"):
 
     with col2:
         if 'correlation' in data_chart:
-            st.subheader(f"Heatmap Data Bersih: {SAHAM_ANALISIS}")
+            st.subheader(f"🧩 Heatmap Data Bersih: {SAHAM_ANALISIS}")
             fig_heat, ax_heat = plt.subplots(figsize=(8, 5))
+            import seaborn as sns
             sns.heatmap(data_chart['correlation'], annot=True, cmap='coolwarm', fmt=".2f", ax=ax_heat)
             st.pyplot(fig_heat)
 
     st.markdown("---")
     
     if 'df' in data_chart:
-        st.subheader(f"Grafik Trading Interaktif: {SAHAM_ANALISIS}")
+        st.subheader(f"📈 Grafik Trading Interaktif: {SAHAM_ANALISIS}")
         df_plot = data_chart['df']
         
         fig = go.Figure()
 
-        # Harga
         fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Close'], mode='lines', name='Close Price', line=dict(color='black', width=1.5)))
-        # EMA
         fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['EMA_50'], mode='lines', name='EMA 50', line=dict(color='blue', width=1, dash='dot')))
         
-        # Area Bollinger Bands
-        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot[data_chart['bbu']], mode='lines', line=dict(width=0), showlegend=False))
-        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot[data_chart['bbl']], mode='lines', fill='tonexty', fillcolor='rgba(128,128,128,0.2)', line=dict(width=0), name='Bollinger Bands'))
+        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['BBU'], mode='lines', line=dict(width=0), showlegend=False))
+        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['BBL'], mode='lines', fill='tonexty', fillcolor='rgba(128,128,128,0.2)', line=dict(width=0), name='Bollinger Bands'))
 
-        # Scatter Buy
         if data_chart['buy']:
             buy_dates, buy_prices = zip(*data_chart['buy'])
             fig.add_trace(go.Scatter(x=buy_dates, y=buy_prices, mode='markers', name='AI Buy', marker=dict(color='green', symbol='triangle-up', size=12, line=dict(color='DarkGreen', width=1))))
 
-        # Scatter Sell
         if data_chart['sell']:
             sell_dates, sell_prices, sell_types = zip(*data_chart['sell'])
             hover_text = [f"Type: {t}<br>Price: {p}" for t, p in zip(sell_types, sell_prices)]
@@ -258,4 +257,4 @@ if st.sidebar.button("🚀 Jalankan AI Backtest", type="primary"):
         fig.update_layout(title=f"Analisis Jejak Out-of-Sample {SAHAM_ANALISIS}", xaxis_title='Tanggal', yaxis_title='Harga', template='plotly_white', hovermode='x unified', height=600)
         st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("Atur parameter di sidebar dan klik **'Jalankan AI Backtest'** untuk memulai simulasi.")
+    st.info("👈 Atur parameter di sidebar dan klik **'Jalankan AI Backtest'** untuk memulai simulasi.")
